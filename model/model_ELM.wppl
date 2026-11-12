@@ -1,0 +1,200 @@
+// ELM model
+
+// helper functions
+var stringify = function(x){return JSON.stringify(x)}
+
+// A speaker may utter any of 10 alternative utterances: 
+// positive bare ("Dinner is ready")
+// positive say ("John says that dinner is ready")
+// positive think ("John thinks that dinner is ready")
+// positive know ("John knows that dinner is ready")
+// positive be-right ("John is right that dinner is ready")
+// and their negations
+
+var utterances = ["pos-say-dinner",
+                  "neg-say-dinner",
+                  "pos-beright-dinner",
+                  "neg-beright-dinner",
+                  "pos-bare-dinner",
+                  "neg-bare-dinner",
+                  "pos-think-dinner",
+                  "neg-think-dinner",
+                  "pos-know-dinner",
+                  "neg-know-dinner"]
+
+// Assume that no utterance is a priori more likely than another
+
+// utterance priors
+var utterancePrior = function() {
+  uniformDraw(utterances)
+}
+
+// Assume that simple (positive and negative bare) utterances are half as costly to produce as complex utterances
+
+// cost function
+var cost = function(utterance) {
+  var splitutt = utterance.split('-')
+  var predicate = splitutt[1]
+  return predicate == "bare" ? 1 : 2
+}
+
+// There are 8 possible world states, depending on:
+// BEL: Does the attitude holder believe that the CC is true? 1: yes / 0: no
+// CC: Is the CC true? 1: yes / 0: no
+// COMMIT: Did the attitude holder publically commit to CC? 1: yes /0: no
+
+// world states
+var worldState = [
+  {BEL:1, CC:1, COMMIT:1},
+  {BEL:1, CC:1, COMMIT:0},
+  {BEL:1, CC:0, COMMIT:1},
+  {BEL:1, CC:0, COMMIT:0},
+  {BEL:0, CC:1, COMMIT:1},
+  {BEL:0, CC:1, COMMIT:0},
+  {BEL:0, CC:0, COMMIT:1},
+  {BEL:0, CC:0, COMMIT:0}
+]
+
+// Assume that each possible world state is equally likely, except for Gricean quality:
+// it's unlikely for someone to make a claim (COMMIT:1) and not mean it (BEL:0)
+// it's likely for someone who makes a claim (COMMIT:1) to mean it (BEL:1)
+
+var statePrior = function() {
+  return categorical({
+    vs: worldState,
+    ps: [10,1,10,1,0.1,1,0.1,1]
+  }) 
+}
+
+// The speaker's private assumptions ("Common ground")
+// The speaker may make any of 7 assumptions
+
+var commonGround = [
+  // no beliefs
+  worldState,
+
+  // speaker observes cc = 1 or cc = 0
+  [{BEL: 1, CC: 1, COMMIT: 1}, {BEL: 0, CC: 1, COMMIT: 1}, {BEL: 1, CC: 1, COMMIT: 0}, {BEL: 0, CC: 1, COMMIT: 0}],
+  [{BEL: 1, CC: 0, COMMIT: 1}, {BEL: 0, CC: 0, COMMIT: 1}, {BEL: 1, CC: 0, COMMIT: 0}, {BEL: 0, CC: 0, COMMIT: 0}],
+
+  // speaker observes bel = 1 or bel = 0
+  [{BEL: 1, CC: 1, COMMIT: 1}, {BEL: 1, CC: 0, COMMIT: 1}, {BEL: 1, CC: 1, COMMIT: 0}, {BEL: 1, CC: 0, COMMIT: 0}],
+  [{BEL: 0, CC: 1, COMMIT: 1}, {BEL: 0, CC: 0, COMMIT: 1}, {BEL: 0, CC: 1, COMMIT: 0}, {BEL: 0, CC: 0, COMMIT: 0}],
+
+  // speaker observes COMMIT = 1 or COMMIT = 0
+  [{BEL: 1, CC: 1, COMMIT: 1}, {BEL: 0, CC: 1, COMMIT: 1}, {BEL: 1, CC: 0, COMMIT: 1}, {BEL: 0, CC: 0, COMMIT: 1}],
+  [{BEL: 1, CC: 1, COMMIT: 0}, {BEL: 0, CC: 1, COMMIT: 0}, {BEL: 1, CC: 0, COMMIT: 0}, {BEL: 0, CC: 0, COMMIT: 0}]
+]
+
+
+// Assume that the absence of assumptions is twice as likely as 
+// assumptions about the answer to the QUD
+
+var CGPrior = function() {
+  return categorical({
+    vs: commonGround,
+    ps: [4, 2, 2, 2, 2, 2, 2]
+  })
+}
+
+
+// QUDs
+// The ccQUD partitions on whether CC is 0 or 1 (you want to know whether CC)
+// The belQUD partitions on whether BEL is 0 or 1 (you want to know whether BEL)
+// The commitQUD partitions on whether COMMIT is 0 or 1 (you want to know whether COMMIT)
+
+var qudFns = {
+  ccQUD : function(state) {return {CC: state.CC}},
+  commitQUD : function(state) {return {COMMIT: state.COMMIT}},
+  belQUD : function(state) {return {BEL: state.BEL}}
+}
+
+// QUD priors don't come into play at all because we assume the listener knows the QUD
+// Instead, qudPriorLookup returns qud based on qudBias
+// here, there is a one-to-one mapping from BEL? to belQUD, and from CC? to ccQUD
+var qudPriorLookup = function(qudBias) {
+    qudBias == "BEL?" ? "belQUD" : qudBias == "CC?" ? "ccQUD": "commitQUD"
+}
+
+
+// Speaker optimality parameter
+var alpha = 10
+
+// meaning functions
+// We assume that both know and be right entail CC and BEL
+// but be right further entails COMMIT
+// each of these entailments is individually expressed by alternative utterances
+// and negation is truth-conditional
+
+var meaning = function(utterance, state) {
+    utterance == "pos-beright-dinner" ? state.BEL == 1 && state.CC == 1 && state.COMMIT == 1 :
+    utterance == "pos-know-dinner" ? state.BEL == 1 && state.CC == 1 :
+    utterance == "pos-say-dinner" ? state.COMMIT==1 :
+    utterance == "pos-think-dinner" ? state.BEL==1 :
+    utterance == "pos-bare-dinner" ? state.CC == 1 :
+    // negated versions
+    utterance == "neg-beright-dinner" ? (false == (state.BEL == 1 && state.CC == 1 && state.COMMIT == 1)):
+    utterance == "neg-know-dinner" ? (false == (state.BEL == 1 && state.CC == 1)):
+    utterance == "neg-say-dinner" ? false == (state.COMMIT == 1) :
+    utterance == "neg-think-dinner" ? false == (state.BEL == 1) :
+    utterance == "neg-bare-dinner" ? false == (state.CC == 1) : true
+  }
+
+//  literal listener
+var literalListener = function(utterance, cg, qud) {
+  Infer({model: function() {
+    var state = statePrior()
+    var qudFn = qudFns[qud]
+    var qudAnswer = qudFn(state)
+    // LL requires the sampled state to be consisted with the cg passed down from the speaker
+    var stringCG = stringify(cg)
+    var stringState = stringify(state)
+    condition(stringCG.includes(stringState))
+    condition(meaning(utterance, state))
+    return qudAnswer
+  }})
+}
+
+// speaker
+var speaker = function(state, cg, qud) {
+  Infer({model: function() {
+    var utterance = uniformDraw(utterances)
+    var qudFn = qudFns[qud]
+    var qudAnswer = qudFn(state)
+    condition(meaning(utterance, state)) // the speaker is always truthful
+    factor(alpha *
+           (literalListener(utterance, cg, qud).score(qudAnswer)
+          - cost(utterance)))
+    return utterance
+  }})
+}
+    
+// pragmatic listener
+var pragmaticListener = function(utterance, qudBias) {
+  Infer({model: function() {
+    var state = statePrior()
+    var cg = CGPrior()
+    var qud = qudPriorLookup(qudBias)
+    // the sampled state is consistent with the speaker's beliefs
+    var stringCG = stringify(cg)
+    var stringState = stringify(state)
+    condition(stringCG.includes(stringState))
+    observe(speaker(state, cg, qud), utterance)
+   return {BEL: state.BEL, CC: state.CC}
+  }})
+}
+
+// pragmatic listener - full
+var pragmaticListenerFull = function(utterance, qudBias) {
+  Infer({model: function() {
+    var state = statePrior()
+    var cg = CGPrior()
+    var qud = qudPriorLookup(qudBias)
+    // the sampled state is consistent with the speaker's beliefs
+    var stringCG = stringify(cg)
+    var stringState = stringify(state)
+    condition(stringCG.includes(stringState))
+    observe(speaker(state, cg, qud), utterance)
+   return {BEL: state.BEL, CC: state.CC, COMMIT: state.COMMIT, cg: cg}
+  }})
+}
